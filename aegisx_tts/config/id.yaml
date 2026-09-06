@@ -1,0 +1,10 @@
+schema_version: 1
+model:
+  backbone: { layers: 12, d_model: 768, heads: 12, d_ff: 2560 }
+  codec: { sample_rate: 24000, frame_ms: 80, rvq_levels: 8, codebook_size: 1024 }
+language: id
+voices:
+  - { name: siregar, file: voices/siregar.safetensors, license: CC-BY-4.0 }
+  - { name: kartini, file: voices/kartini.safetensors, license: CC0-1.0 }
+limits:
+  max_text_chars: 50000

@@ -85,7 +85,19 @@ def serve(
     _validate_language(language)
     if port < 1 or port > 65535:
         _fail(f"Port tidak valid: {port}")
-    _fail("Server HTTP aktif di M3 (docs/07 roadmap).")
+
+    import uvicorn
+
+    from aegisx_tts.core.config import ModelConfig
+
+    # Config minimal bawaan; bobot M2 akan di-load di lifespan server.
+    config = ModelConfig.from_yaml(
+        Path(__file__).parent.parent / "config" / f"{language}.yaml"
+    )
+    from aegisx_tts.server.app import create_app
+
+    typer.echo(f"AegisX-TTS serve di http://{host}:{port}", err=True)
+    uvicorn.run(create_app(config), host=host, port=port, log_level="warning")
 
 
 @app.command()
