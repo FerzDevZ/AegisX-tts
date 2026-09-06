@@ -1,0 +1,4 @@
+# Dict pengecualian G2P Bahasa Indonesia (docs/02 §3.4).
+# Format: kata,fonem1|fonem2|...
+# Kontribusi komunitas: PR dengan bukti fonemik (KBBI pelafalan).
+saya,s|a|j|a

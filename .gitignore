@@ -1,0 +1,21 @@
+# Data AegisX-TTS yang tidak masuk version control.
+# Struktur sesuai docs/03-data-pipeline.md §4.2.
+
+data/
+checkpoints/
+voice_cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.venv/
+.~lock.*#
+
+# Tooling Freebuff (config agent lokal, bukan bagian proyek)
+.freebuff/

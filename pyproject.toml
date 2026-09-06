@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aegisx-tts"
+version = "0.1.0.dev1"
+description = "CPU-first streaming TTS untuk Bahasa Indonesia, Inggris, Melayu, dan Jawa."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "AegisX-TTS Contributors" }]
+dependencies = [
+    "pydantic>=2.0",
+    "typer>=0.12",
+    "torch>=2.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "types-PyYAML",
+]
+
+[project.scripts]
+aegisx-tts = "aegisx_tts.cli.main:app"
+
+[tool.setuptools.packages.find]
+include = ["aegisx_tts*"]
+
+[tool.setuptools.package-data]
+aegisx_tts = ["config/*.yaml", "text/dicts/*.csv", "i18n/locales/*.ftl", "py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# B008: pola resmi typer/FastAPI meletakkan Option/Argument di default parameter.
+ignore = ["B008"]
+
+[tool.mypy]
+# Runtime resmi v0.1: Python 3.12+ (numpy/pytorch stubs modern butuh 3.12).
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
