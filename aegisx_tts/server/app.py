@@ -311,20 +311,32 @@ def create_app(config: ModelConfig, engine: Any | None = None) -> FastAPI:
 
             # Backpressure: budget = chunk yang dikirim tapi belum di-ACK.
             # 10 s audio (docs/04 §4.3); chunk engine fixture = 1 s.
+            # Saat budget penuh: tunggu ACK secara memblokir (ACK_TIMEOUT);
+            # slow_consumer hanya bila timeout habis — konsumen aktif yang
+            # ACK-nya datang terlambat tidak salah dihukum.
             max_unacked = 10
+            ack_timeout_s = 5.0
             sent_unread = 0
             seq = 0
             for chunk in _engine.synthesize_stream(str(text), language, voice):
                 if sent_unread >= max_unacked:
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "code": "slow_consumer",
-                            "message": "konsumen lebih lambat 10 s audio (docs/04 §4.3)",
-                        }
-                    )
-                    await websocket.close()
-                    return
+                    try:
+                        while sent_unread >= max_unacked:
+                            ack = await asyncio.wait_for(
+                                websocket.receive_json(), timeout=ack_timeout_s
+                            )
+                            if ack.get("type") == "ack":
+                                sent_unread -= 1
+                    except (asyncio.TimeoutError, TimeoutError):
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "code": "slow_consumer",
+                                "message": "konsumen lebih lambat 10 s audio (docs/04 §4.3)",
+                            }
+                        )
+                        await websocket.close()
+                        return
                 await websocket.send_json(
                     {
                         "type": "audio",
@@ -334,15 +346,15 @@ def create_app(config: ModelConfig, engine: Any | None = None) -> FastAPI:
                 )
                 seq += 1
                 sent_unread += 1
-                # Drain ACK yang menumpuk tanpa memblokir.
+                # Drain ACK yang sudah menunggu tanpa memblokir lama.
                 while True:
                     try:
                         ack = await asyncio.wait_for(
-                            websocket.receive_json(), timeout=0.001
+                            websocket.receive_json(), timeout=0.05
                         )
                         if ack.get("type") == "ack":
                             sent_unread = max(0, sent_unread - 1)
-                    except (asyncio.TimeoutError, Exception):
+                    except (asyncio.TimeoutError, TimeoutError):
                         break
 
             await websocket.send_json({"type": "done"})
