@@ -5,18 +5,24 @@ Endpoint:
 - GET /health          → liveness
 - GET /v1/voices       → katalog suara + lisensi (REQ-050)
 - POST /v1/audio/speech → OpenAI-compatible (F6)
+- POST /v1/audio/speech/stream → SSE streaming (docs/04 §4.3)
 
 Error schema konsisten {"error": {code, message, locale}} dengan locale dari
 header Accept-Language (id default, fallback en) — NFR-11/F10.
 Sintesis nyata menunggu bobot M2 → 503 model_not_loaded (eksplisit).
+Streaming via dependency injection `engine`: produksi default None → 503;
+test menyuntik engine fixture eksplisit (bukan stub tersembunyi).
 """
 
 from __future__ import annotations
 
+import base64
+import json
+from collections.abc import Iterator
 from typing import Any, Final, Literal
 
-from fastapi import FastAPI, Header, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Header, Request, WebSocket
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from aegisx_tts.constants import SUPPORTED_LANGUAGES
@@ -41,6 +47,16 @@ class SpeechRequest(BaseModel):
     response_format: str = "wav"
 
 
+class StreamRequest(BaseModel):
+    """Skema request SSE streaming (docs/04 §4.3)."""
+
+    model_config = {"extra": "ignore"}
+
+    text: str
+    language: str | None = None
+    voice: str | None = None
+
+
 class SpeechResponse(BaseModel):
     """Error schema konsisten semua endpoint (docs/04 §5)."""
 
@@ -62,10 +78,12 @@ def _error_response(code: str, message: str, locale: str, status: int) -> JSONRe
     )
 
 
-def create_app(config: ModelConfig) -> FastAPI:
+def create_app(config: ModelConfig, engine: Any | None = None) -> FastAPI:
+    """Bangun app FastAPI; `engine` di-inject untuk streaming (M2 bobot)."""
     app = FastAPI(title="AegisX-TTS", version="0.1.0.dev1", docs_url=None, redoc_url=None)
     cfg = config
     voice_names = {v.name for v in cfg.voices}
+    _engine = engine
 
     @app.middleware("http")
     async def csp_header(request: Request, call_next: Any) -> Any:
@@ -129,6 +147,211 @@ def create_app(config: ModelConfig) -> FastAPI:
             )
         except ModelWeightsUnavailable as exc:
             return _error_response("model_not_loaded", str(exc), locale, 503)
+
+    @app.post(
+        "/v1/audio/speech/stream",
+        response_model=None,
+    )
+    async def speech_stream(
+        req: StreamRequest, accept_language: str | None = Header(default=None)
+    ) -> JSONResponse | StreamingResponse:
+        """SSE streaming: event meta → audio* → done (docs/04 §4.3)."""
+        locale = _pick_locale(accept_language)
+        language = req.language or cfg.language
+
+        if not req.text or not req.text.strip():
+            return _error_response(
+                "invalid_request", get_message("error_input_required", locale), locale, 422
+            )
+        if len(req.text) > cfg.limits.max_text_chars:
+            return _error_response(
+                "text_too_long",
+                get_message("error_text_too_long", locale, limit=cfg.limits.max_text_chars),
+                locale,
+                413,
+            )
+        if language not in SUPPORTED_LANGUAGES:
+            return _error_response(
+                "invalid_request",
+                get_message("error_invalid_language", locale, lang=language),
+                locale,
+                422,
+            )
+        voice = req.voice or (cfg.voices[0].name if cfg.voices else "")
+        if voice not in voice_names:
+            return _error_response(
+                "invalid_voice",
+                get_message("error_invalid_voice", locale, voice=voice),
+                locale,
+                404,
+            )
+        if _engine is None:
+            return _error_response(
+                "model_not_loaded",
+                f"Bobot '{cfg.language}' belum dirilis (target M2, docs/07 roadmap)",
+                locale,
+                503,
+            )
+
+        def sse_events() -> Iterator[str]:
+            # meta event (docs/04 §4.3: sample_rate, format, voice, watermark)
+            meta = {
+                "type": "meta",
+                "seq": 0,
+                "sample_rate": 24000,
+                "format": "pcm16",
+                "voice": voice,
+                "watermark": cfg.watermark.enabled,
+                "audio_b64": "",
+                "done": False,
+            }
+            yield f"data: {json.dumps(meta, ensure_ascii=False)}\n\n"
+            seq = 1
+            stream: Iterator[bytes] = _engine.synthesize_stream(
+                req.text, language, voice
+            )
+            for chunk in stream:
+                payload = {
+                    "type": "audio",
+                    "seq": seq,
+                    "audio_b64": base64.b64encode(chunk).decode("ascii"),
+                    "done": False,
+                }
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                seq += 1
+            done = {
+                "type": "done",
+                "seq": seq,
+                "audio_b64": "",
+                "done": True,
+            }
+            yield f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            sse_events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.websocket("/v1/audio/speech/ws")
+    async def speech_ws(websocket: WebSocket) -> None:
+        """WS streaming dua arah + backpressure slow_consumer (docs/04 §4.3)."""
+        import asyncio
+
+        await websocket.accept()
+        try:
+            request = await websocket.receive_json()
+            if request.get("type") != "synthesize":
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "code": "invalid_request",
+                        "message": "type harus 'synthesize'",
+                    }
+                )
+                await websocket.close()
+                return
+
+            text = request.get("text", "")
+            language = request.get("language") or cfg.language
+            voice = request.get("voice") or (cfg.voices[0].name if cfg.voices else "")
+
+            if not text or not str(text).strip():
+                await websocket.send_json(
+                    {"type": "error", "code": "invalid_request", "message": "teks wajib"}
+                )
+                await websocket.close()
+                return
+            if len(str(text)) > cfg.limits.max_text_chars:
+                await websocket.send_json(
+                    {"type": "error", "code": "text_too_long", "message": "teks terlalu panjang"}
+                )
+                await websocket.close()
+                return
+            if language not in SUPPORTED_LANGUAGES:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "code": "invalid_language",
+                        "message": f"bahasa {language!r} tidak didukung",
+                    }
+                )
+                await websocket.close()
+                return
+            if voice not in voice_names:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "code": "invalid_voice",
+                        "message": f"suara {voice!r} tidak dikenal",
+                    }
+                )
+                await websocket.close()
+                return
+            if _engine is None:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "code": "model_not_loaded",
+                        "message": "bobot belum tersedia (M2)",
+                    }
+                )
+                await websocket.close()
+                return
+
+            await websocket.send_json(
+                {
+                    "type": "meta",
+                    "sample_rate": 24000,
+                    "format": "pcm16",
+                    "voice": voice,
+                    "watermark": cfg.watermark.enabled,
+                }
+            )
+
+            # Backpressure: budget = chunk yang dikirim tapi belum di-ACK.
+            # 10 s audio (docs/04 §4.3); chunk engine fixture = 1 s.
+            max_unacked = 10
+            sent_unread = 0
+            seq = 0
+            for chunk in _engine.synthesize_stream(str(text), language, voice):
+                if sent_unread >= max_unacked:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "code": "slow_consumer",
+                            "message": "konsumen lebih lambat 10 s audio (docs/04 §4.3)",
+                        }
+                    )
+                    await websocket.close()
+                    return
+                await websocket.send_json(
+                    {
+                        "type": "audio",
+                        "seq": seq,
+                        "audio_b64": base64.b64encode(chunk).decode("ascii"),
+                    }
+                )
+                seq += 1
+                sent_unread += 1
+                # Drain ACK yang menumpuk tanpa memblokir.
+                while True:
+                    try:
+                        ack = await asyncio.wait_for(
+                            websocket.receive_json(), timeout=0.001
+                        )
+                        if ack.get("type") == "ack":
+                            sent_unread = max(0, sent_unread - 1)
+                    except (asyncio.TimeoutError, Exception):
+                        break
+
+            await websocket.send_json({"type": "done"})
+            await websocket.close()
+        except Exception:
+            try:
+                await websocket.close()
+            except Exception:  # pragma: no cover
+                pass
 
     def _render_ui() -> str:
         voice_options = "".join(

@@ -33,6 +33,12 @@ _MESSAGES: Final[dict[str, dict[str, str]]] = {
         "ms": "Format '{fmt}' tidak disokong (wav, pcm, mp3, opus).",
         "jv": "Format '{fmt}' ora didhukung (wav, pcm, mp3, opus).",
     },
+    "error_invalid_language": {
+        "id": "Bahasa '{lang}' tidak didukung (id, en, ms, jv).",
+        "en": "Language '{lang}' is not supported (id, en, ms, jv).",
+        "ms": "Bahasa '{lang}' tidak disokong (id, en, ms, jv).",
+        "jv": "Basa '{lang}' ora didhukung (id, en, ms, jv).",
+    },
 }
 
 _FALLBACK: Final[str] = "en"
