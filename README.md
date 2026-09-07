@@ -1,5 +1,10 @@
 # AegisX-TTS
 
+[![CI](https://github.com/FerzDevZ/AegisX-tts/actions/workflows/ci.yml/badge.svg)](https://github.com/FerzDevZ/AegisX-tts/actions/workflows/ci.yml)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](pyproject.toml)
+[![License: Code Apache-2.0 / Weights CC-BY-4.0](https://img.shields.io/badge/license-Apache--2.0_%2B_CC--BY--4.0-green.svg)](#-lisensi--etika)
+[![CPU-first](https://img.shields.io/badge/inference-CPU--first-orange.svg)](docs/02-technical-spec.md)
+
 > *TTS ringan yang hidup di CPU-mu — dibangun untuk Bahasa Indonesia, Bahasa Inggris, dan 2 bahasa lainnya (Melayu & Jawa), dengan dukungan full 4 bahasa di seluruh antarmuka.*
 
 **AegisX-TTS** adalah sistem text-to-speech (TTS) open-source yang dirancang dari nol: model ~100M parameter yang berjalan penuh di CPU, streaming real-time dengan latensi chunk pertama ≤ 250 ms, lebih cepat dari real-time, dan mendukung *voice cloning* dari sampel audio singkat.
