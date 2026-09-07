@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import torch
 import typer
 
 from aegisx_tts import __version__
@@ -139,6 +140,45 @@ def tokenize(
     except AegisXTTSError as exc:
         _fail(str(exc))
     typer.echo(" ".join(tokens))
+
+
+@app.command()
+def verify(
+    audio: Path = typer.Argument(..., help="File WAV 24 kHz mono untuk diverifikasi."),
+) -> None:
+    """Verifikasi watermark konsent dalam file WAV (docs/05 §3)."""
+    if not audio.exists():
+        _fail(f"File audio tidak ditemukan: {audio}")
+
+    import wave
+
+    import numpy as np
+
+    from aegisx_tts.core.watermark import verify_watermark
+
+    try:
+        with wave.open(str(audio), "rb") as w:
+            if w.getnchannels() != 1 or w.getsampwidth() != 2:
+                _fail("WAV harus mono PCM 16-bit")
+            raw = w.readframes(w.getnframes())
+    except (wave.Error, EOFError) as exc:
+        _fail(f"File bukan WAV yang valid: {exc}")
+
+    ints = np.frombuffer(raw, dtype="<i2")
+    audio_tensor = torch.from_numpy(ints.astype(np.float32) / 32768.0)
+    payload = verify_watermark(audio_tensor)
+    if payload is None:
+        _fail("Tidak ada watermark valid terdeteksi dalam audio ini")
+        return  # unreachable; _fail selalu raise — membantu type checker
+
+    import json
+
+    typer.echo(
+        json.dumps(
+            {"tier": payload.tier, "voice": payload.voice},
+            ensure_ascii=False,
+        )
+    )
 
 
 def version_callback(value: bool) -> None:
